@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLAM 学习笔记 · 从零手写 2D 激光 SLAM</title>
+<meta name="description" content="12 周从零手写一个 2D 激光 SLAM：数据、标定、前端、后端、回环、多传感器与工程化，全部笔记与代码公开。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%232563eb'/></svg>">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap bar-inner">
+    <a class="brand" href="#/home">SLAM<span class="brand-dot">·</span>学习笔记</a>
+    <button id="nav-toggle" aria-label="打开导航" aria-expanded="false">☰</button>
+    <nav id="nav">
+      <a href="#/home"   data-route="home">首页</a>
+      <a href="#/notes"  data-route="notes">学习笔记</a>
+      <a href="#/player" data-route="player">扫描播放器</a>
+      <a href="#/icp"    data-route="icp">ICP 实验</a>
+      <a href="#/traj"   data-route="traj">轨迹对比</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ 首页 ============ -->
+  <section id="page-home" class="page">
+    <div class="hero">
+      <h1>从零手写一个 2D 激光 SLAM</h1>
+      <p class="lead">用 12 周时间，把 Cartographer 论文数据集和 KITTI 从 rosbag 一路做到轨迹评估——不调库、不抄框架，每一步都有笔记、有数字、有图。</p>
+      <p class="hero-links">
+        <a class="btn" href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">GitHub 仓库</a>
+        <a class="btn btn-ghost" href="https://ccccty.github.io/slam_study/">在线演示站</a>
+      </p>
+    </div>
+
+    <h2>12 周路线图</h2>
+    <div class="roadmap" id="roadmap"></div>
+
+    <h2>现在进行到哪</h2>
+    <div class="card">
+      <p><span class="badge badge-done">已完成</span> <strong>W1 把数据跑起来</strong>：rosbag → 400 帧扫描（1079 点/帧），数据台账、统计画像、X3 数据画像见「学习笔记」。</p>
+      <p><span class="badge badge-doing">进行中</span> <strong>W2 标定与时间同步</strong>：KITTI calib.txt 外参、多传感器时间戳对齐。</p>
+      <p class="muted">本站的三个可视化模块（扫描播放器 / ICP 实验 / 轨迹对比）会在数据导出完成后自动切换到真实数据；导出前显示内置小样本。</p>
+    </div>
+  </section>
+
+  <!-- ============ 学习笔记 ============ -->
+  <section id="page-notes" class="page">
+    <h2>学习笔记</h2>
+    <div class="notes-layout">
+      <aside class="notes-list" id="notes-list"></aside>
+      <article class="notes-body card" id="notes-body">
+        <p class="muted">从左侧选择一篇笔记。</p>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ 扫描播放器 ============ -->
+  <section id="page-player" class="page">
+    <h2>扫描播放器</h2>
+    <p class="muted">Cartographer 论文 Deutsches Museum 数据集的 2D 激光扫描，逐帧播放。坐标单位：米；x 向前、y 向左（激光雷达坐标系）。</p>
+    <div class="card">
+      <div class="controls">
+        <button id="player-play" class="btn">▶ 播放</button>
+        <label>倍速
+          <select id="player-speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+        <input type="range" id="player-slider" min="0" max="0" value="0" step="1">
+        <span id="player-info" class="mono"></span>
+      </div>
+      <canvas id="player-canvas" class="viz"></canvas>
+      <p id="player-status" class="muted"></p>
+    </div>
+  </section>
+
+  <!-- ============ ICP 实验 ============ -->
+  <section id="page-icp" class="page">
+    <h2>ICP 实验：初值偏差多大就会崩？</h2>
+    <p class="muted">同一对扫描（第 27 帧，合成真值旋转 6.0°、平移 26.9 cm，噪声 σ=1 cm），只改初始猜测的旋转角，观察 ICP 迭代收敛到哪儿。</p>
+    <div class="card">
+      <div class="controls" id="icp-buttons"></div>
+      <div class="controls">
+        <button id="icp-play" class="btn">▶ 播放迭代</button>
+        <input type="range" id="icp-slider" min="0" max="0" value="0" step="1">
+        <span id="icp-info" class="mono"></span>
+        <span id="icp-badge"></span>
+      </div>
+      <div class="icp-layout">
+        <canvas id="icp-canvas" class="viz"></canvas>
+        <canvas id="icp-curve" class="viz curve"></canvas>
+      </div>
+      <p id="icp-status" class="muted"></p>
+    </div>
+    <div class="card">
+      <h3>为什么会「跳变」：局部极小</h3>
+      <p>ICP 每一步都在做两件贪心的事：给每个点找最近的对应点，再求让这组对应误差最小的变换。初值偏得不远时，找到的最近点大多是<strong>真正</strong>的对应点，于是每轮都朝正确方向走，误差压到毫米级。</p>
+      <p>但初值一旦越过临界角度（本实验约 <strong>24°</strong>），第一批「最近点」就大量配错——比如把一扇墙的点配到另一扇墙上。错误的对应把解拉向错误的极小值，之后每轮都在错误盆地里越陷越深。所以误差曲线不是慢慢变差，而是从 0.3 cm <strong>突然跳</strong>到 15.8 cm、角度误差从 0.01° 跳到 23.7°：这就是局部极小。</p>
+      <p>这次残差从 0.00013 涨到 2.58（约两万倍），能当报警信号；但在平行墙、长走廊场景里错配后残差可能只轻微升高，必须再看重叠率或与运动先验比对。更系统的分析见「学习笔记 → ICP误差-初值实验」。</p>
+    </div>
+  </section>
+
+  <!-- ============ 轨迹对比 ============ -->
+  <section id="page-traj" class="page">
+    <h2>轨迹对比（KITTI 真值）</h2>
+    <p class="muted">KITTI Odometry 真值轨迹俯视图（取平移的 x、z 分量），后续手写 SLAM 的输出会叠在同一张图上对比。</p>
+    <div class="card">
+      <div class="controls" id="traj-buttons"></div>
+      <canvas id="traj-canvas" class="viz"></canvas>
+      <p id="traj-info" class="mono"></p>
+      <p id="traj-status" class="muted"></p>
+    </div>
+    <div class="card">
+      <h3>ATE / RPE 是什么，evo 怎么用</h3>
+      <p><strong>ATE</strong>（Absolute Trajectory Error，绝对轨迹误差）：把估计轨迹整体对齐到真值后，每个位置点的直线误差的统计量（常取 RMSE）。回答的是「整条轨迹离真值多远」，反映全局一致性——回环没做好，ATE 会很大。</p>
+      <p><strong>RPE</strong>（Relative Pose Error，相对位姿误差）：看每一小段（如每 10 m）估计的相对运动与真值相对运动差多少。回答的是「局部走得准不准」，反映漂移速率，对没有回环的纯里程计更公平。</p>
+      <p>用 Python 的 <code>evo</code> 库一条命令就能算（本仓库 venv 已安装）：</p>
+      <pre><code>evo_ape kitti groundtruth/00.txt output/00.txt -a --plot   # 对齐后算 ATE 并画图
+evo_rpe kitti groundtruth/00.txt output/00.txt --delta 10 --delta_unit m -p   # 每 10 m 算 RPE</code></pre>
+      <p class="muted">评估脚本见仓库 tools/ 目录；本页展示的轨迹即 evo 所读的同一份真值文件。</p>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <span>SLAM 学习笔记 · 内容以中文公开于
+      <a href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">github.com/ccccty/slam_study</a></span>
+  </div>
+</footer>
+
+<script src="assets/vendor/marked.min.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

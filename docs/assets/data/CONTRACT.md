@@ -6,7 +6,7 @@
 ## 通用约定
 - 单位：米（m）、弧度（rad）、秒（s，Unix 时间戳可相对归零）。
 - 扫描点坐标系：激光雷达坐标系，x 前、y 左，已过滤无效点（NaN/Inf/超量程）。
-- 所有 JSON UTF-8、无 BOM；浮点保留 4 位小数以控制体积。
+- 所有 JSON UTF-8、无 BOM；浮点保留 4 位小数以控制体积。例外（v1.1）：`icp_trace.json` 的 `rmse` 保留 6 位小数（收敛残差约 1e-4，4 位会丢精度）。
 - 前端加载顺序：先取正式文件 `assets/data/<name>.json`，404 时回退 `assets/data/__fixture__/<name>.json`，仍失败则显示「数据尚未生成」占位。
 
 ## 1. scans_seq.json —— 扫描序列播放器

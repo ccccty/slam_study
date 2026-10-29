@@ -1,6 +1,7 @@
 /* SLAM 可视化演示站前端（无框架，Canvas 2D，rviz 深色工程风）
- * 数据契约：assets/data/CONTRACT.md（v2）
+ * 数据契约：assets/data/CONTRACT.md（v3：replay_index 多场景段 / slam_replay/2 对照链 / icp_grid 收敛域）
  * 加载顺序：assets/data/<name>.json → assets/data/__fixture__/<name>.json → 占位提示
+ * 正式文件一旦出现在 assets/data/ 根下即自动优先于 fixture，无需改代码。
  */
 (function () {
   "use strict";
@@ -25,14 +26,36 @@
     return chain.catch(function () { return null; });
   }
 
+  // 只探测可用性（HEAD，不下载正文），用于段选择器灰显；返回来源标签或 null
+  function probeData(name) {
+    var bases = ["assets/data/", "assets/data/__fixture__/"];
+    var labels = ["正式数据", "示例小样本"];
+    var chain = Promise.reject(new Error("start"));
+    bases.forEach(function (b, i) {
+      chain = chain.catch(function () {
+        return fetch(b + name, { method: "HEAD" }).then(function (r) {
+          if (!r.ok) throw new Error("404");
+          return labels[i];
+        });
+      });
+    });
+    return chain.catch(function () { return null; });
+  }
+
   function srcNote(source) {
     return source ? "数据来源：" + source : "数据尚未生成（将由 tools 导出）";
+  }
+
+  function wrapAngle(a) {
+    while (a > Math.PI) a -= 2 * Math.PI;
+    while (a < -Math.PI) a += 2 * Math.PI;
+    return a;
   }
 
   // 深色 rviz 风等比例坐标系绘图器：自适应 DPR 与容器宽度
   var C = {
     grid: "#242a34", gridText: "#5c6675", axis: "#3a4250", axisText: "#7c8698",
-    map: "#6f8265", scan: "#ffc145", traj: "#4da3ff", robot: "#ff5f57"
+    map: "#6f8265", scan: "#ffc145", traj: "#4da3ff", robot: "#ff5f57", alt: "#ff9f43"
   };
 
   function makePlot(canvas) {
@@ -201,7 +224,9 @@
 
   var slam = {
     data: null, idx: 0, playing: false, raf: 0, acc: 0, last: 0,
-    plot: null, bbox: null, posesXY: [], pathCum: [0], rmseArr: [], inlierArr: []
+    plot: null, bbox: null, posesXY: [], pathCum: [0], rmseArr: [], inlierArr: [],
+    segments: null, segId: null, reqSeq: 0,
+    altPoses: null, altLabel: "", showAlt: false
   };
 
   function initSlam() {
@@ -218,10 +243,103 @@
     $("slam-slider").addEventListener("input", function () {
       setSlamFrame(parseInt(this.value, 10) || 0);
     });
+    $("slam-alt-toggle").addEventListener("change", function () {
+      slam.showAlt = this.checked && !!slam.altPoses;
+      refreshAltLegend();
+      drawSlam();
+    });
     window.addEventListener("resize", redrawSlam);
-    loadData("slam_replay.json").then(function (res) {
+    // 先读多场景段索引（契约 v3 第 5 节）；索引缺失时退回 v2 单段行为
+    loadData("replay_index.json").then(function (idxRes) {
+      if (idxRes && idxRes.data && idxRes.data.segments && idxRes.data.segments.length) {
+        setupSegments(idxRes.data.segments);
+      } else {
+        loadSlamSegment({ id: "main", label: "大厅段", file: "slam_replay.json" });
+      }
+    });
+  }
+
+  // 渲染段选择器按钮，逐段探测数据是否就绪（未就绪灰显）
+  function setupSegments(segments) {
+    slam.segments = segments;
+    $("slam-seg-bar").hidden = false;
+    var box = $("slam-segments");
+    box.innerHTML = "";
+    segments.forEach(function (seg) {
+      var b = document.createElement("button");
+      b.className = "init-btn seg-btn";
+      b.textContent = seg.label || seg.id;
+      b.setAttribute("data-seg", seg.id);
+      b.title = seg.desc || "";
+      b.addEventListener("click", function () {
+        if (!b.disabled) selectSegment(seg.id);
+      });
+      box.appendChild(b);
+    });
+    var probes = segments.map(function (seg) {
+      return probeData(seg.file).then(function (label) {
+        var btn = box.querySelector('[data-seg="' + seg.id + '"]');
+        if (!btn) return label;
+        if (!label) {
+          btn.disabled = true;
+          btn.title = (seg.desc || seg.label || seg.id) + " —— 数据尚未生成";
+        } else {
+          btn.title = (seg.desc || seg.label || seg.id) +
+            (seg.tags && seg.tags.length ? "（" + seg.tags.join(" / ") + "）" : "") +
+            " —— " + label;
+        }
+        return label;
+      });
+    });
+    Promise.all(probes).then(function (labels) {
+      var def = null, i;
+      for (i = 0; i < segments.length; i++) {           // 契约：id=main 为默认段
+        if (segments[i].id === "main" && labels[i]) { def = segments[i]; break; }
+      }
+      for (i = 0; !def && i < segments.length; i++) {   // main 未就绪时取第一个可用段
+        if (labels[i]) { def = segments[i]; break; }
+      }
+      if (def) {
+        selectSegment(def.id);
+      } else {
+        $("slam-status").textContent = "所有场景段的数据都尚未生成（将由 tools 导出）";
+        drawSlamPlaceholder();
+      }
+    });
+  }
+
+  function selectSegment(id) {
+    var seg = null;
+    (slam.segments || []).forEach(function (s) { if (s.id === id) seg = s; });
+    if (!seg) return;
+    slam.segId = id;
+    document.querySelectorAll("#slam-segments .seg-btn").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-seg") === id);
+    });
+    loadSlamSegment(seg);
+  }
+
+  // 加载并重置一个场景段（切换段 = 重新加载该段 JSON + 回放归零）
+  function loadSlamSegment(seg) {
+    slam.playing = false;
+    if (slam.raf) cancelAnimationFrame(slam.raf);
+    $("slam-play").textContent = "▶ 播放";
+    slam.data = null; slam.idx = 0;
+    slam.posesXY = []; slam.pathCum = [0]; slam.rmseArr = []; slam.inlierArr = [];
+    slam.altPoses = null; slam.altLabel = ""; slam.showAlt = false;
+    $("slam-alt-wrap").hidden = true;      // 契约：/1 无 alt 时隐藏对照开关
+    $("slam-alt-toggle").checked = false;
+    $("stat-alt-row").hidden = true;
+    refreshAltLegend();
+    var slider = $("slam-slider");
+    slider.max = "0"; slider.value = "0";
+    var myReq = ++slam.reqSeq;             // 防止快速切换时旧响应覆盖新段
+    $("slam-status").textContent = "正在加载「" + (seg.label || seg.id) + "」…";
+    drawSlamPlaceholder();
+    loadData(seg.file).then(function (res) {
+      if (myReq !== slam.reqSeq) return;
       if (!res) {
-        $("slam-status").textContent = "数据尚未生成（将由 tools/10_odometry.py 在真实数据上运行后导出 slam_replay.json）";
+        $("slam-status").textContent = "「" + (seg.label || seg.id) + "」数据尚未生成（将由 tools 导出 " + seg.file + "）";
         drawSlamPlaceholder();
         return;
       }
@@ -244,18 +362,45 @@
         eat(f.pose[0], f.pose[1]);
       });
       (res.data.map || []).forEach(function (p) { eat(p[0], p[1]); });
+      // 对照链（schema slam_replay/2 可选字段）：零初值重跑的位姿链
+      if (res.data.alt && res.data.alt.poses && res.data.alt.poses.length) {
+        slam.altPoses = [];
+        res.data.alt.poses.forEach(function (p) {
+          slam.altPoses.push([p[0], p[1]]);
+          eat(p[0], p[1]);
+        });
+        slam.altLabel = res.data.alt.label || "对照链";
+        $("slam-alt-text").textContent = slam.altLabel;
+        $("slam-alt-wrap").hidden = false;
+        // 侧栏：双链末端偏差 |Δx|, |Δy| 与 Δθ
+        var lf = frames[frames.length - 1].pose;
+        var la = res.data.alt.poses[res.data.alt.poses.length - 1];
+        $("stat-alt").textContent =
+          "|Δx|=" + Math.abs(lf[0] - la[0]).toFixed(3) +
+          ", |Δy|=" + Math.abs(lf[1] - la[1]).toFixed(3) +
+          " m ｜ Δθ=" + Math.abs(wrapAngle(lf[2] - (la[2] || 0))).toFixed(4) + " rad";
+        $("stat-alt-row").hidden = false;
+      }
       slam.bbox = [minX, minY, maxX, maxY];
-      var slider = $("slam-slider");
       slider.max = String(frames.length - 1);
       slider.value = "0";
       slam.idx = 0;
       var meta = res.data.meta || {};
-      $("slam-status").textContent = srcNote(res.source) +
+      $("slam-status").textContent = "当前段：" + (seg.label || seg.id) +
+        (seg.desc ? "（" + seg.desc + "）" : "") + "；" + srcNote(res.source) +
         "；数据集共 " + (meta.frames_total || frames.length) + " 帧" +
         (meta.method ? "；方法：" + meta.method : "") +
         (meta.path_length_m != null ? "；全程路径约 " + meta.path_length_m + " m" : "");
       drawSlam();
     });
+  }
+
+  // 图例：对照链开启时区分两条链（恒速初值 / 零初值）
+  function refreshAltLegend() {
+    var show = slam.showAlt && slam.altPoses;
+    $("lg-alt-wrap").hidden = !show;
+    $("lg-traj-text").textContent = show ? "轨迹·恒速初值" : "已走轨迹";
+    if (show) $("lg-alt-text").textContent = slam.altLabel || "对照链·零初值";
   }
 
   function redrawSlam() {
@@ -301,9 +446,12 @@
     plot.fitBounds(slam.bbox); // 固定视图：回放时地图不跳动
     plot.clear();
     plot.grid();
-    // 累积地图点（暗灰绿）→ 已走轨迹（蓝）→ 当前帧扫描（亮黄）→ 机器人（红三角）
+    // 累积地图点（暗灰绿）→ 已走轨迹（蓝）→ 对照链（橙）→ 当前帧扫描（亮黄）→ 机器人（红三角）
     plot.pointsRange(d.map, 0, f.map_upto, C.map, 1.7);
     plot.polyline(slam.posesXY.slice(0, i + 1), C.traj, 2);
+    if (slam.showAlt && slam.altPoses) {
+      plot.polyline(slam.altPoses.slice(0, Math.min(i + 1, slam.altPoses.length)), C.alt, 2);
+    }
     plot.points(f.scan, C.scan, 2.2);
     drawRobot(plot, f.pose);
     // 信息行 + 状态面板 + 迷你曲线
@@ -384,12 +532,17 @@
 
   /* ================= ICP 实验 ================= */
 
-  var icp = { data: null, run: null, it: 0, playing: false, raf: 0, last: 0, plot: null, curve: null };
+  var icp = {
+    data: null, run: null, it: 0, playing: false, raf: 0, last: 0, plot: null, curve: null,
+    traceData: null, traceStatus: "",          // icp_trace.json（初值扫描实验）
+    gridData: null, gridDims: null, gridRange: null, gridRects: [], gridHover: -1, gridSel: -1
+  };
 
   function initIcp() {
     icp.plot = makePlot($("icp-canvas"));
     icp.curve = $("icp-curve").getContext("2d");
     $("icp-play").addEventListener("click", function () {
+      if (!icp.run) return;
       icp.playing = !icp.playing;
       $("icp-play").textContent = icp.playing ? "⏸ 暂停" : "▶ 播放迭代";
       icp.last = 0;
@@ -399,12 +552,21 @@
       icp.it = parseInt(this.value, 10) || 0;
       drawIcp();
     });
-    window.addEventListener("resize", drawIcp);
+    var gc = $("icp-grid");
+    gc.addEventListener("click", onGridPick);
+    gc.addEventListener("mousemove", onGridHover);
+    gc.addEventListener("mouseleave", function () {
+      icp.gridHover = -1;
+      $("icp-grid-info").textContent = "";
+      drawIcpGrid();
+    });
+    window.addEventListener("resize", function () { drawIcp(); drawIcpGrid(); });
     loadData("icp_trace.json").then(function (res) {
       if (!res) {
         $("icp-status").textContent = srcNote(null);
         return;
       }
+      icp.traceData = res.data;
       icp.data = res.data;
       var box = $("icp-buttons");
       box.innerHTML = "";
@@ -415,15 +577,35 @@
         b.addEventListener("click", function () { selectRun(i); });
         box.appendChild(b);
       });
-      $("icp-status").textContent = srcNote(res.source) +
+      icp.traceStatus = srcNote(res.source) +
         "；真值（读自数据文件）：旋转 " + res.data.truth.deg + "°，平移 [" +
         res.data.truth.t.map(function (v) { return Number(v).toFixed(4); }).join(", ") + "] m";
-      selectRun(0);
+      $("icp-status").textContent = icp.traceStatus;
+      if (!icp.run) selectRun(0); // 用户可能已从地形图选格，别覆盖
+    });
+    // 收敛域地形图（契约 v3 第 7 节）
+    loadData("icp_grid.json").then(function (res) {
+      if (!res) {
+        $("icp-grid-status").textContent = "收敛域地形图数据尚未生成（将由 tools 导出 icp_grid.json）";
+        drawGridPlaceholder();
+        return;
+      }
+      icp.gridData = res.data;
+      buildGridIndex();
+      drawIcpGrid();
+      var g = res.data.grid;
+      $("icp-grid-status").textContent = srcNote(res.source) +
+        "；网格 " + g.degs.length + "×" + g.dxs.length + " = " + (res.data.cells || []).length +
+        " 格 ｜ 真值：旋转 " + res.data.truth.deg + "°，平移 [" +
+        res.data.truth.t.map(function (v) { return Number(v).toFixed(4); }).join(", ") + "] m";
     });
   }
 
+  // 初值按钮：数据源切回 icp_trace 的 run
   function selectRun(i) {
-    icp.run = icp.data.runs[i];
+    icp.data = icp.traceData;
+    icp.run = icp.traceData.runs[i];
+    icp.gridSel = -1;
     icp.it = 0;
     icp.playing = false;
     $("icp-play").textContent = "▶ 播放迭代";
@@ -433,7 +615,169 @@
     document.querySelectorAll("#icp-buttons .init-btn").forEach(function (b, j) {
       b.classList.toggle("active", i === j);
     });
+    if (icp.traceStatus) $("icp-status").textContent = icp.traceStatus;
     drawIcp();
+    drawIcpGrid(); // 清掉格子选中高亮
+  }
+
+  // 地形图格子：把上半部动画的数据源切到该格的 iterations
+  function selectGridCell(gi) {
+    var cell = (icp.gridData.cells || [])[gi];
+    if (!cell || !cell.iterations || !cell.iterations.length) return;
+    icp.data = icp.gridData; // grid JSON 自带同口径 target/source
+    icp.run = { converged: !!cell.converged, iterations: cell.iterations, init_deg: cell.deg };
+    icp.gridSel = gi;
+    icp.it = 0;
+    icp.playing = false;
+    $("icp-play").textContent = "▶ 播放迭代";
+    var slider = $("icp-slider");
+    slider.max = String(cell.iterations.length - 1);
+    slider.value = "0";
+    document.querySelectorAll("#icp-buttons .init-btn").forEach(function (b) {
+      b.classList.remove("active");
+    });
+    $("icp-status").textContent = "正在回放地形图格子：初值偏差 deg=" + cell.deg + "°、dx=" +
+      cell.dx + " m（真值：旋转 " + icp.gridData.truth.deg + "°、平移 [" +
+      icp.gridData.truth.t.map(function (v) { return Number(v).toFixed(4); }).join(", ") + "] m）；" +
+      "点上方「初值 ×°」按钮可回到单变量实验";
+    drawIcp();
+    drawIcpGrid();
+  }
+
+  /* ---- 收敛域地形图 ---- */
+
+  function buildGridIndex() {
+    var g = icp.gridData;
+    var degs = g.grid.degs.slice().sort(function (a, b) { return a - b; });
+    var dxs = g.grid.dxs.slice().sort(function (a, b) { return a - b; });
+    icp.gridDims = { degs: degs, dxs: dxs };
+    // 深浅归一化范围：收敛格与失败格各自按 iters 归一
+    var ci = [], fi = [];
+    (g.cells || []).forEach(function (c) { (c.converged ? ci : fi).push(c.iters || 0); });
+    icp.gridRange = {
+      c: ci.length ? [Math.min.apply(null, ci), Math.max.apply(null, ci)] : [0, 1],
+      f: fi.length ? [Math.min.apply(null, fi), Math.max.apply(null, fi)] : [0, 1]
+    };
+  }
+
+  function gridCellColor(cell) {
+    var range = cell.converged ? icp.gridRange.c : icp.gridRange.f;
+    var span = (range[1] - range[0]) || 1;
+    var f = ((cell.iters || 0) - range[0]) / span; // 0=轮次最少
+    var alpha = 0.88 - 0.55 * f;                   // 轮次越少颜色越深
+    return cell.converged
+      ? "rgba(52,211,153," + alpha.toFixed(3) + ")"
+      : "rgba(248,113,113," + alpha.toFixed(3) + ")";
+  }
+
+  function gridCellAt(mx, my) {
+    for (var i = 0; i < icp.gridRects.length; i++) {
+      var r = icp.gridRects[i];
+      if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return r;
+    }
+    return null;
+  }
+
+  function gridEventPos(e) {
+    var rect = e.currentTarget.getBoundingClientRect();
+    return [e.clientX - rect.left, e.clientY - rect.top];
+  }
+
+  function onGridHover(e) {
+    if (!icp.gridData) return;
+    var p = gridEventPos(e);
+    var hit = gridCellAt(p[0], p[1]);
+    var gi = hit ? hit.gi : -1;
+    var canvas = $("icp-grid");
+    if (gi === icp.gridHover) return;
+    icp.gridHover = gi;
+    canvas.style.cursor = hit ? "pointer" : "crosshair";
+    var info = $("icp-grid-info");
+    if (hit) {
+      var c = hit.cell;
+      info.textContent = "deg=" + c.deg + "°, dx=" + c.dx + " m ｜ " +
+        (c.converged ? "✔ 收敛" : "✘ 未收敛") + " ｜ 迭代 " + c.iters + " 轮 ｜ 末端误差：平移 " +
+        c.final_err.t_cm + " cm、角度 " + c.final_err.deg + "° ｜ final_rmse=" + c.final_rmse;
+    } else {
+      info.textContent = "";
+    }
+    drawIcpGrid();
+  }
+
+  function onGridPick(e) {
+    if (!icp.gridData) return;
+    var p = gridEventPos(e);
+    var hit = gridCellAt(p[0], p[1]);
+    if (hit) selectGridCell(hit.gi);
+  }
+
+  function drawIcpGrid() {
+    if (!icp.gridData || !icp.gridDims) return;
+    var canvas = $("icp-grid");
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var degs = icp.gridDims.degs, dxs = icp.gridDims.dxs;
+    var ny = degs.length, nx = dxs.length;
+    var padL = 52, padR = 14, padT = 14, padB = 40;
+    var cw = (w - padL - padR) / nx, ch = (h - padT - padB) / ny;
+    // 轴刻度：纵轴 deg（底部为最小值），横轴 dx
+    ctx.font = "11px Consolas, monospace"; ctx.fillStyle = "#8a93a3";
+    degs.forEach(function (dg, r) {
+      var y = padT + (ny - 1 - r) * ch;
+      ctx.fillText(dg + "°", 10, y + ch / 2 + 4);
+    });
+    dxs.forEach(function (dx, c) {
+      var x = padL + c * cw;
+      var label = String(dx);
+      ctx.fillText(label, x + cw / 2 - label.length * 3.3, h - padB + 16);
+    });
+    ctx.fillText("dx 平移偏差 (m) →", padL, h - 8);
+    ctx.fillText("deg ↑", 10, padT + 2);
+    // 格子
+    icp.gridRects = [];
+    var cells = icp.gridData.cells || [];
+    for (var gi = 0; gi < cells.length; gi++) {
+      var cell = cells[gi];
+      var col = dxs.indexOf(cell.dx), row = degs.indexOf(cell.deg);
+      if (col < 0 || row < 0) continue;
+      var rx = padL + col * cw, ry = padT + (ny - 1 - row) * ch;
+      ctx.fillStyle = gridCellColor(cell);
+      ctx.fillRect(rx + 2, ry + 2, cw - 4, ch - 4);
+      icp.gridRects.push({ x: rx + 2, y: ry + 2, w: cw - 4, h: ch - 4, gi: gi, cell: cell });
+      if (gi === icp.gridSel) { // 选中格：白框
+        ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2;
+        ctx.strokeRect(rx + 2, ry + 2, cw - 4, ch - 4);
+      } else if (gi === icp.gridHover) { // 悬停格：蓝框
+        ctx.strokeStyle = "#4da3ff"; ctx.lineWidth = 1.5;
+        ctx.strokeRect(rx + 2, ry + 2, cw - 4, ch - 4);
+      }
+      // 格内轮次数
+      ctx.fillStyle = "rgba(11,14,19,0.85)";
+      ctx.font = "bold 11px Consolas, monospace";
+      var t = String(cell.iters);
+      ctx.fillText(t, rx + cw / 2 - t.length * 3.3, ry + ch / 2 + 4);
+      ctx.font = "11px Consolas, monospace";
+    }
+  }
+
+  function drawGridPlaceholder() {
+    var canvas = $("icp-grid");
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    var ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#5c6675"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("收敛域地形图数据尚未生成", w / 2, h / 2);
+    ctx.textAlign = "left";
   }
 
   function icpTick(now) {
@@ -575,11 +919,83 @@
 
   /* ================= 学习笔记 ================= */
 
+  // 笔记公式管线：抽取保护数学 -> marked 渲染 -> 回填 KaTeX。
+  // 直接拿 marked 产出的 DOM 交给 auto-render 时，公式里的 _ 会先被 Markdown 当强调处理，
+  // 文本节点被撕碎后 auto-render 就匹配不到了，所以必须在 markdown 之前先把公式保护起来。
+  var MATH_TOKEN = "\u0000MATH";
+
+  function escapeHtmlLite(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // 从原始 md 抽取公式：$$...$$（可跨行）优先，其次 $...$（段内配对、不跨空行、不与 $$ 冲突）。
+  // 公式正文保持原样（反斜杠、下划线、百分号均不转义）；代码围栏内一律不抽取。
+  function extractMath(src) {
+    var map = [];
+    function token(tex, display) {
+      map.push({ tex: tex, display: display });
+      return MATH_TOKEN + (map.length - 1) + "\u0000";
+    }
+    function protect(chunk) {
+      var s = chunk.replace(/\$\$([\s\S]+?)\$\$/g, function (m, body) {
+        return token(body, true);
+      });
+      // 行内 $...$：在空行分隔的同一段落内配对（允许段内换行，但绝不跨空行），
+      // 且不与 $$ 冲突；公式正文不做转义。
+      s = s.split(/(\n[ \t]*\n+)/).map(function (seg, i) {
+        if (i % 2) return seg; // 空行分隔符原样保留
+        return seg.replace(/\$(?!\$)([^$]+?)\$(?!\$)/g, function (m, body) {
+          if (/^\s|\s$/.test(body)) return m; // "$5 和 $6" 这类不当公式
+          return token(body, false);
+        });
+      }).join("");
+      return s;
+    }
+    var out = [], buf = [], inFence = false;
+    function flush() { if (buf.length) { out.push(protect(buf.join("\n"))); buf = []; } }
+    src.split(/\r?\n/).forEach(function (line) {
+      if (/^\s*(```|~~~)/.test(line)) {
+        flush();
+        out.push(line);
+        inFence = !inFence;
+        return;
+      }
+      if (inFence) out.push(line); else buf.push(line);
+    });
+    flush();
+    return { text: out.join("\n"), map: map };
+  }
+
+  // 单个公式转 KaTeX HTML；失败一律回退为 <code> 原文，绝不抛异常
+  function mathToHtml(tex, display) {
+    var html = null;
+    try {
+      if (window.katex && window.katex.renderToString) {
+        html = window.katex.renderToString(tex, { displayMode: display, throwOnError: false });
+      }
+    } catch (e) { html = null; }
+    if (!html || html.indexOf("katex-error") >= 0) {
+      return '<code class="math-fallback">' +
+        escapeHtmlLite(display ? "$$" + tex + "$$" : "$" + tex + "$") + "</code>";
+    }
+    return html;
+  }
+
+  function renderNoteHtml(text) {
+    var ex = extractMath(text);
+    return window.marked.parse(ex.text).replace(/\u0000MATH(\d+)\u0000/g, function (m, i) {
+      var item = ex.map[Number(i)];
+      return item ? mathToHtml(item.tex, item.display) : m;
+    });
+  }
+
   var NOTES = [
     { file: "数据台账_cartographer_paper_deutsches_museum.md", title: "数据台账 · Deutsches Museum" },
     { file: "扫描统计_cartographer_paper_deutsches_museum.md", title: "扫描统计 · Deutsches Museum" },
     { file: "X3数据画像.md", title: "X3 数据画像" },
     { file: "ICP误差-初值实验.md", title: "ICP 误差-初值实验" },
+    { file: "ICP理论推导.md", title: "ICP 理论推导" },
     { file: "标定与时间同步.md", title: "标定与时间同步" },
     { file: "环境自检报告.md", title: "环境自检报告" },
     { file: "assets/data/CONTRACT.md", title: "数据契约 CONTRACT" },
@@ -615,7 +1031,7 @@
       })
       .then(function (text) {
         if (window.marked && window.marked.parse) {
-          body.innerHTML = window.marked.parse(text);
+          body.innerHTML = renderNoteHtml(text); // 公式已在 markdown 前抽取，这里回填 KaTeX
         } else {
           var pre = document.createElement("pre");
           pre.textContent = text; // marked 未加载时降级为纯文本
@@ -632,7 +1048,11 @@
   /* ================= 启动 ================= */
 
   var INIT = { slam: initSlam, icp: initIcp, traj: initTraj, notes: initNotes };
-  var REDRAW = { slam: redrawSlam, icp: drawIcp, traj: drawTraj };
+  var REDRAW = {
+    slam: redrawSlam,
+    icp: function () { drawIcp(); drawIcpGrid(); },
+    traj: drawTraj
+  };
 
   route();
 })();

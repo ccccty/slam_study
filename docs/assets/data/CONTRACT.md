@@ -1,4 +1,4 @@
-# 网站数据契约 v2（docs/assets/data/）
+# 网站数据契约 v3（docs/assets/data/）
 
 本文件是「数据导出」（tools/07_export_web_data.py）与「网站前端」（docs/assets/app.js）之间的唯一契约。
 双方都以此为准，不得私自改动格式；改动必须同步更新本文件版本号。
@@ -79,3 +79,49 @@
 - map = 累积地图点（全局系）；frames[i].map_upto = 第 i 帧结束后地图数组的末尾索引（前端画 map[0..map_upto]）；每帧地图增量 ≤100 点。
 - rmse（该帧 ICP 收敛残差，6 位小数）与 n_inlier（内点数）用于侧栏质量监控；第 0 帧 rmse=0、n_inlier=0。
 - 体积目标 ≤ 1.5MB；除 rmse 外浮点 4 位小数。
+
+
+---
+
+## 5. replay_index.json —— 多场景段索引（v3 新增）
+```json
+{
+  "schema": "replay_index/1",
+  "segments": [
+    { "id": "main", "label": "大厅段", "file": "slam_replay.json", "frames": 400,
+      "desc": "开阔大厅，混合运动", "tags": ["开阔", "混合"] }
+  ]
+}
+```
+- 前端启动时先读此索引生成段选择器；每段的 file 是相对 assets/data/ 的文件名。
+- id=main 必须为默认段（向后兼容现有 slam_replay.json）。
+
+## 6. slam_replay*.json 升级到 schema "slam_replay/2"
+在 v2（第 4 节）全部字段之上新增**可选**字段：
+```json
+{ "schema": "slam_replay/2", "frames": [], "map": [],
+  "alt": { "label": "零初值对照链", "poses": [[0.0, 0.0, 0.0]] } }
+```
+- alt.poses 与 frames 等长，是同一数据用零初值重跑的对照链全局位姿。
+- 前端兼容 /1（无 alt 时隐藏对照开关）。所有段（含 main）本轮都重导为 /2。
+
+## 7. icp_grid.json —— ICP 收敛域地形图（v3 新增）
+```json
+{
+  "schema": "icp_grid/1",
+  "source_frame": 27,
+  "truth": { "deg": 6.0, "t": [0.25, 0.1] },
+  "target": [[0.42, 1.03]], "source": [[0.45, 1.0]],
+  "grid": { "degs": [-30, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30],
+            "dxs": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5] },
+  "cells": [
+    { "deg": -30, "dx": 0.0, "converged": true, "iters": 21,
+      "final_err": { "t_cm": 0.27, "deg": 0.011 }, "final_rmse": 0.000125,
+      "iterations": [{ "R": [[1,0],[0,1]], "t": [0.0, 0.0], "rmse": 0.012345 }] }
+  ]
+}
+```
+- 初值 = 真值位姿叠加角度偏差 deg（度）+ 沿 x 的平移偏差 dx（米）；cells 覆盖 degs × dxs 全部 78 格。
+- target/source 点集与 icp_trace.json 同口径（第 27 帧、400 点、σ=1cm 加噪需用同一随机种子流程，保证与 icp_trace 结果一致）。
+- iterations[0]=初值位姿；converged 判据与 icp_trace 相同；rmse 6 位小数，其余 4 位。
+- 体积目标 ≤ 1.5MB；若超限，iterations 只保留每格前 60 条。

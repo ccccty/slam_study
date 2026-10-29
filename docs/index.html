@@ -6,6 +6,7 @@
 <title>SLAM 可视化 · 从零手写 2D 激光 SLAM</title>
 <meta name="description" content="2D 激光 SLAM 手写全过程的可视化界面：建图回放、ICP 收敛实验、轨迹对比，数据与代码全部公开。">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231a1d23'/><circle cx='8' cy='8' r='4' fill='%23ffc145'/></svg>">
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -28,6 +29,13 @@
   <section id="page-slam" class="page">
     <div class="slam-layout">
       <div class="slam-main">
+        <div class="controls seg-bar" id="slam-seg-bar" hidden>
+          <span class="seg-label">场景段</span>
+          <span id="slam-segments" class="seg-buttons"></span>
+          <label id="slam-alt-wrap" class="alt-toggle" hidden>
+            <input type="checkbox" id="slam-alt-toggle"> 叠加对照链（<span id="slam-alt-text">零初值</span>）
+          </label>
+        </div>
         <div class="card slam-canvas-card">
           <canvas id="slam-canvas" class="viz slam-viz"></canvas>
           <div class="controls slam-controls">
@@ -48,7 +56,7 @@
         <p class="muted slam-note">
           这是 <code>tools/10_odometry.py</code> 在 400 帧真实数据（Cartographer 论文 Deutsches Museum 数据集）上的运行回放，
           无回环校正——注意地图后期的重影，那是漂移。
-          图例：<span class="lg lg-map"></span>累积地图点　<span class="lg lg-scan"></span>当前帧扫描　<span class="lg lg-traj"></span>已走轨迹　<span class="lg lg-robot">▲</span>机器人当前位姿。
+          图例：<span class="lg lg-map"></span>累积地图点　<span class="lg lg-scan"></span>当前帧扫描　<span class="lg lg-traj"></span><span id="lg-traj-text">已走轨迹</span><span id="lg-alt-wrap" hidden>　<span class="lg lg-alt"></span><span id="lg-alt-text">对照链·零初值</span></span>　<span class="lg lg-robot">▲</span>机器人当前位姿。
         </p>
       </div>
       <aside class="slam-side">
@@ -60,6 +68,7 @@
             <tr><td>内点数</td><td class="mono" id="stat-inlier">—</td></tr>
             <tr><td>地图总点数</td><td class="mono" id="stat-map">—</td></tr>
             <tr><td>已走路径长度</td><td class="mono" id="stat-path">—</td></tr>
+            <tr id="stat-alt-row" hidden><td>双链末端偏差<br>|Δx|, |Δy|（m）与 Δθ（rad）</td><td class="mono" id="stat-alt">—</td></tr>
           </table>
         </div>
         <div class="card">
@@ -96,6 +105,18 @@
         <canvas id="icp-curve" class="viz curve"></canvas>
       </div>
       <p id="icp-status" class="muted"></p>
+    </div>
+    <div class="card">
+      <h3>收敛域地形图：多大的初值偏差还能救回来？</h3>
+      <p class="muted">
+        把初值偏差铺满一张网格——纵轴是角度偏差 deg（度），横轴是沿 x 的平移偏差 dx（米）——每格独立跑一次完整 ICP：
+        <span class="lg-dot" style="background:#34d399"></span>绿色 = 收敛（颜色越深，用的迭代轮次越少）　
+        <span class="lg-dot" style="background:#f87171"></span>红色 = 陷入局部极小。
+        悬停格子看末端误差摘要，<strong>点击格子</strong>即可在上方动画区回放该格的迭代过程。
+      </p>
+      <canvas id="icp-grid" class="viz grid-viz"></canvas>
+      <p id="icp-grid-info" class="mono"></p>
+      <p id="icp-grid-status" class="muted"></p>
     </div>
     <div class="card">
       <h3>为什么会「跳变」：局部极小</h3>
@@ -148,6 +169,8 @@ evo_rpe kitti groundtruth/00.txt output/00.txt --delta 10 --delta_unit m -p   # 
 </footer>
 
 <script src="assets/vendor/marked.min.js"></script>
+<script src="assets/vendor/katex/katex.min.js"></script>
+<script src="assets/vendor/katex/auto-render.min.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>

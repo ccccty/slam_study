@@ -193,6 +193,28 @@ canvas.curve { height: 420px; }
 }
 .footer a { color: var(--accent); text-decoration: none; }
 
+/* ---- v3：场景段选择器 / 对照链 / 收敛域地形图 ---- */
+[hidden] { display: none !important; }
+
+.seg-bar { margin-bottom: 10px; }
+.seg-label { color: var(--muted); font-size: 14px; }
+.seg-buttons { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.seg-btn:disabled { opacity: 0.38; cursor: not-allowed; border-style: dashed; }
+.seg-btn:disabled:hover { border-color: var(--line); }
+.alt-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--ink); font-size: 14px; cursor: pointer;
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
+}
+.alt-toggle input { accent-color: #ff9f43; }
+.slam-note .lg-alt { background: #ff9f43; height: 3px; vertical-align: 3px; }
+
+.lg-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  margin: 0 5px 0 2px; vertical-align: -1px;
+}
+canvas.grid-viz { height: 320px; cursor: crosshair; }
+
 /* ---- 移动端 ---- */
 @media (max-width: 900px) {
   #nav-toggle { display: block; }
@@ -211,4 +233,6 @@ canvas.curve { height: 420px; }
   canvas.viz { height: 300px; }
   canvas.slam-viz { height: 340px; }
   canvas.curve { height: 220px; }
+  canvas.grid-viz { height: 240px; }
+  .seg-bar { gap: 8px; }
 }

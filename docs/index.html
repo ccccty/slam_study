@@ -3,81 +3,79 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SLAM 学习笔记 · 从零手写 2D 激光 SLAM</title>
-<meta name="description" content="12 周从零手写一个 2D 激光 SLAM：数据、标定、前端、后端、回环、多传感器与工程化，全部笔记与代码公开。">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%232563eb'/></svg>">
+<title>SLAM 可视化 · 从零手写 2D 激光 SLAM</title>
+<meta name="description" content="2D 激光 SLAM 手写全过程的可视化界面：建图回放、ICP 收敛实验、轨迹对比，数据与代码全部公开。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%231a1d23'/><circle cx='8' cy='8' r='4' fill='%23ffc145'/></svg>">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
 <header class="topbar">
   <div class="wrap bar-inner">
-    <a class="brand" href="#/home">SLAM<span class="brand-dot">·</span>学习笔记</a>
+    <a class="brand" href="#/slam">SLAM<span class="brand-dot">·</span>可视化</a>
     <button id="nav-toggle" aria-label="打开导航" aria-expanded="false">☰</button>
     <nav id="nav">
-      <a href="#/home"   data-route="home">首页</a>
-      <a href="#/notes"  data-route="notes">学习笔记</a>
-      <a href="#/player" data-route="player">扫描播放器</a>
-      <a href="#/icp"    data-route="icp">ICP 实验</a>
-      <a href="#/traj"   data-route="traj">轨迹对比</a>
+      <a href="#/slam"  data-route="slam">SLAM 回放</a>
+      <a href="#/icp"   data-route="icp">ICP 实验</a>
+      <a href="#/traj"  data-route="traj">轨迹对比</a>
+      <a href="#/notes" data-route="notes">学习笔记</a>
     </nav>
   </div>
 </header>
 
 <main class="wrap">
 
-  <!-- ============ 首页 ============ -->
-  <section id="page-home" class="page">
-    <div class="hero">
-      <h1>从零手写一个 2D 激光 SLAM</h1>
-      <p class="lead">用 12 周时间，把 Cartographer 论文数据集和 KITTI 从 rosbag 一路做到轨迹评估——不调库、不抄框架，每一步都有笔记、有数字、有图。</p>
-      <p class="hero-links">
-        <a class="btn" href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">GitHub 仓库</a>
-        <a class="btn btn-ghost" href="https://ccccty.github.io/slam_study/">在线演示站</a>
-      </p>
-    </div>
-
-    <h2>12 周路线图</h2>
-    <div class="roadmap" id="roadmap"></div>
-
-    <h2>现在进行到哪</h2>
-    <div class="card">
-      <p><span class="badge badge-done">已完成</span> <strong>W1 把数据跑起来</strong>：rosbag → 400 帧扫描（1079 点/帧），数据台账、统计画像、X3 数据画像见「学习笔记」。</p>
-      <p><span class="badge badge-doing">进行中</span> <strong>W2 标定与时间同步</strong>：KITTI calib.txt 外参、多传感器时间戳对齐。</p>
-      <p class="muted">本站的三个可视化模块（扫描播放器 / ICP 实验 / 轨迹对比）会在数据导出完成后自动切换到真实数据；导出前显示内置小样本。</p>
-    </div>
-  </section>
-
-  <!-- ============ 学习笔记 ============ -->
-  <section id="page-notes" class="page">
-    <h2>学习笔记</h2>
-    <div class="notes-layout">
-      <aside class="notes-list" id="notes-list"></aside>
-      <article class="notes-body card" id="notes-body">
-        <p class="muted">从左侧选择一篇笔记。</p>
-      </article>
-    </div>
-  </section>
-
-  <!-- ============ 扫描播放器 ============ -->
-  <section id="page-player" class="page">
-    <h2>扫描播放器</h2>
-    <p class="muted">Cartographer 论文 Deutsches Museum 数据集的 2D 激光扫描，逐帧播放。坐标单位：米；x 向前、y 向左（激光雷达坐标系）。</p>
-    <div class="card">
-      <div class="controls">
-        <button id="player-play" class="btn">▶ 播放</button>
-        <label>倍速
-          <select id="player-speed">
-            <option value="0.5">0.5×</option>
-            <option value="1" selected>1×</option>
-            <option value="2">2×</option>
-            <option value="4">4×</option>
-          </select>
-        </label>
-        <input type="range" id="player-slider" min="0" max="0" value="0" step="1">
-        <span id="player-info" class="mono"></span>
+  <!-- ============ SLAM 建图回放（默认首页） ============ -->
+  <section id="page-slam" class="page">
+    <div class="slam-layout">
+      <div class="slam-main">
+        <div class="card slam-canvas-card">
+          <canvas id="slam-canvas" class="viz slam-viz"></canvas>
+          <div class="controls slam-controls">
+            <button id="slam-play" class="btn">▶ 播放</button>
+            <label>倍速
+              <select id="slam-speed">
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+                <option value="4">4×</option>
+              </select>
+            </label>
+            <input type="range" id="slam-slider" min="0" max="0" value="0" step="1">
+            <span id="slam-info" class="mono"></span>
+          </div>
+          <p id="slam-status" class="muted"></p>
+        </div>
+        <p class="muted slam-note">
+          这是 <code>tools/10_odometry.py</code> 在 400 帧真实数据（Cartographer 论文 Deutsches Museum 数据集）上的运行回放，
+          无回环校正——注意地图后期的重影，那是漂移。
+          图例：<span class="lg lg-map"></span>累积地图点　<span class="lg lg-scan"></span>当前帧扫描　<span class="lg lg-traj"></span>已走轨迹　<span class="lg lg-robot">▲</span>机器人当前位姿。
+        </p>
       </div>
-      <canvas id="player-canvas" class="viz"></canvas>
-      <p id="player-status" class="muted"></p>
+      <aside class="slam-side">
+        <div class="card">
+          <h3>状态监控</h3>
+          <table class="stat-table">
+            <tr><td>当前位姿 [x, y, θ]<br>（m, m, rad）</td><td class="mono" id="stat-pose">—</td></tr>
+            <tr><td>ICP rmse</td><td class="mono" id="stat-rmse">—</td></tr>
+            <tr><td>内点数</td><td class="mono" id="stat-inlier">—</td></tr>
+            <tr><td>地图总点数</td><td class="mono" id="stat-map">—</td></tr>
+            <tr><td>已走路径长度</td><td class="mono" id="stat-path">—</td></tr>
+          </table>
+        </div>
+        <div class="card">
+          <h3>rmse 随帧变化</h3>
+          <canvas id="spark-rmse" class="spark"></canvas>
+        </div>
+        <div class="card">
+          <h3>内点数随帧变化</h3>
+          <canvas id="spark-inlier" class="spark"></canvas>
+        </div>
+        <div class="card about-card">
+          <h3>关于本项目</h3>
+          <p>12 周从零手写一个 2D 激光 SLAM：数据、标定、前端、后端、回环、多传感器与工程化，全程笔记与代码公开。</p>
+          <p><a href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">GitHub 仓库</a> · <a href="#/notes">学习笔记</a></p>
+        </div>
+      </aside>
     </div>
   </section>
 
@@ -128,12 +126,24 @@ evo_rpe kitti groundtruth/00.txt output/00.txt --delta 10 --delta_unit m -p   # 
     </div>
   </section>
 
+  <!-- ============ 学习笔记 ============ -->
+  <section id="page-notes" class="page">
+    <h2>学习笔记</h2>
+    <div class="notes-layout">
+      <aside class="notes-list" id="notes-list"></aside>
+      <article class="notes-body card" id="notes-body">
+        <p class="muted">从左侧选择一篇笔记。</p>
+      </article>
+    </div>
+  </section>
+
 </main>
 
 <footer class="footer">
   <div class="wrap">
-    <span>SLAM 学习笔记 · 内容以中文公开于
-      <a href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">github.com/ccccty/slam_study</a></span>
+    <span>从零手写 2D 激光 SLAM · 内容以中文公开于
+      <a href="https://github.com/ccccty/slam_study" target="_blank" rel="noopener">github.com/ccccty/slam_study</a>
+      · <a href="https://ccccty.github.io/slam_study/" target="_blank" rel="noopener">在线演示站</a></span>
   </div>
 </footer>
 

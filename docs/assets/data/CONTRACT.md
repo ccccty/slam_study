@@ -1,4 +1,4 @@
-# 网站数据契约 v1（docs/assets/data/）
+# 网站数据契约 v2（docs/assets/data/）
 
 本文件是「数据导出」（tools/07_export_web_data.py）与「网站前端」（docs/assets/app.js）之间的唯一契约。
 双方都以此为准，不得私自改动格式；改动必须同步更新本文件版本号。
@@ -56,3 +56,26 @@
 ```
 - 来源 datasets/kitti_odometry/dataset/poses/{00,05,08}.txt（每行 12 个数 = 3×4 位姿矩阵，取平移的 x、z 做俯视）。
 - 每序列均匀降采样到 ≤2000 点，保留整体形状；length_m 用原始全量点计算。
+
+
+---
+
+## 4. slam_replay.json —— SLAM 建图过程回放（v2 新增，本轮主角）
+```json
+{
+  "schema": "slam_replay/1",
+  "source": "cartographer_paper_deutsches_museum.bag / horizontal_laser_2d",
+  "frames": [
+    { "i": 0, "t": 0.0, "pose": [0.0, 0.0, 0.0], "rmse": 0.0, "n_inlier": 0,
+      "scan": [[0.42, 1.03]], "map_upto": 87 }
+  ],
+  "map": [[0.42, 1.03]],
+  "meta": { "frames_total": 400, "path_length_m": 0.0, "odom_final": [0.0, 0.0, 0.0],
+            "method": "scan-to-scan ICP 链（无回环校正）" }
+}
+```
+- frames 覆盖全部 400 帧；pose 为里程计全局位姿 [x, y, theta]（第 0 帧为原点，米/弧度）。
+- scan = 该帧扫描点**已变换到全局坐标系**（≤140 点，前端直接画，不再变换）。
+- map = 累积地图点（全局系）；frames[i].map_upto = 第 i 帧结束后地图数组的末尾索引（前端画 map[0..map_upto]）；每帧地图增量 ≤100 点。
+- rmse（该帧 ICP 收敛残差，6 位小数）与 n_inlier（内点数）用于侧栏质量监控；第 0 帧 rmse=0、n_inlier=0。
+- 体积目标 ≤ 1.5MB；除 rmse 外浮点 4 位小数。

@@ -1,0 +1,20 @@
+# ---- 本机环境与运行产物（不上传）----
+env/
+logs/
+__pycache__/
+*.tmp
+
+# ---- 第三方源码（只读，不进仓库）----
+code/
+
+# ---- 大体量原始数据（不上传；小体积导出结果保留）----
+*.bag
+*.zip
+datasets/m2dgr/
+datasets/radish/
+datasets/x3/
+
+# 注意：以下目录必须被跟踪，勿加入忽略：
+#   datasets/kitti_odometry/dataset/  （小体积 txt 标定与真值）
+#   datasets/processed/               （npz 导出结果，<1MB）
+#   docs/  tools/
